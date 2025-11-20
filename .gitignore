@@ -1,0 +1,52 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+*.pyo
+*.pyd
+*.pkl
+*.pickle
+
+# === Virtual Env ===
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# === Cache & Logs ===
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb
+
+# === Model Checkpoints ===
+*.pt
+*.pth
+*.ckpt
+
+# === VSCode ===
+.vscode/
+.history/
+
+# === Data ===
+data/*
+!data/.gitkeep   # data 폴더는 유지하되 내부 파일은 git에서 제외
+
+# === Results ===
+results/
+output/
+runs/
+
+# === Optuna ===
+optuna.db
+study.db
+
+# === Misc ===
+*.zip
+*.tar
