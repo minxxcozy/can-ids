@@ -85,14 +85,24 @@ def window_to_feature_vector(
     return feats
 
 
-def label_for_window(
-    window: pd.DataFrame,
-    col_info: Dict[str, Any],
-) -> Optional[str]:
+def label_for_window(w, col_info):
+    # 컬럼 이름
     label_col = col_info["label"]
-    if label_col is None:
-        return None
-    # 윈도우 내 다수결
-    values, counts = np.unique(window[label_col].values, return_counts=True)
-    idx = np.argmax(counts)
-    return values[idx]
+
+    # 해당 window 안에서의 unique 라벨 수집
+    labels = list(w[label_col].astype(str).unique())
+
+    # Attack 우선 규칙
+    if "Attack" in labels:
+        return "Attack"
+
+    # Normal만 있는 경우
+    if "Normal" in labels:
+        return "Normal"
+
+    # 기타 레이블 처리 (예: Fuzzing, Spoofing)
+    if len(labels) > 0:
+        # Attack이 없는데 다른 공격 서브클래스만 있을 때
+        return labels[0]
+
+    return None
