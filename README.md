@@ -10,7 +10,7 @@ cd can-ids
 
 ### 2️⃣ 가상환경 생성 (필수)
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 ```
 
 ### 3️⃣ 가상환경 활성화
@@ -21,7 +21,12 @@ python3 -m venv .venv
 
 **Windows PowerShell**
 ```bash
-.\.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
+```
+
+**Windows CMD**
+```bash
+.venv\Scripts\activate
 ```
 > ⚠️ (중요) 명령어 실행 시 항상 (.venv) 표시가 떠야 합니다.
 
