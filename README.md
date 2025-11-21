@@ -87,13 +87,26 @@ python -m models.train_baseline --csv data/your_dataset.csv --window-sec 1
 ### 🟢 LSTM 기반 시퀀스 모델 실행
 > 시간 흐름 (시계열 패턴)을 학습하기 위한 모델입니다.
 
+**Δt 시퀀스용 LSTM 분류기**
 ```bash
 python -m models.lstm_model \
   --csv data/your_dataset.csv \
   --window-size 32 \
   --epochs 10
 ```
-DoS, Replay Attack 등의 타이밍 이상 탐지에 매우 강력합니다.
+
+**리플레이 공격 탐지 강화를 위한 멀티-피처 LSTM 모델**
+```bash
+python -m models.lstm_replay_model --csv data/my_can_log.csv
+```
+
+```bash
+python -m models.lstm_replay_model \
+    --csv data/my_can_log.csv \
+    --window-size 32 \
+    --step-size 16 \
+    --epochs 10
+```
 
 ### 🔴 1D-CNN 기반 시퀀스 모델 실행
 > LSTM보다 더 빠르고 가벼운 모델입니다.
