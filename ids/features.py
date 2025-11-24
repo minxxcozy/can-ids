@@ -1,9 +1,8 @@
 # ids/features.py
 
-from __future__ import annotations
-from typing import Dict, Any, Tuple, Optional, List
-from collections import Counter
 import math
+from typing import Dict, Any, List
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -11,6 +10,13 @@ import pandas as pd
 from .io_utils import load_csv_with_meta
 from .windowing import make_time_windows
 
+ATTACK_PRIORITY = {
+    "DoS": 4,
+    "Fuzzing": 3,
+    "Spoofing": 2,
+    "Replay": 1,
+    "Normal": 0,
+}
 
 def _entropy(counter: Counter) -> float:
     total = sum(counter.values())
@@ -21,7 +27,6 @@ def _entropy(counter: Counter) -> float:
         p = v / total
         ent -= p * math.log2(p)
     return ent
-
 
 def _payload_entropy(hex_str: str) -> float:
     if not isinstance(hex_str, str):
@@ -35,12 +40,9 @@ def _payload_entropy(hex_str: str) -> float:
         return 0.0
     return _entropy(Counter(raw))
 
-
 def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
-    """Fixed window → feature vector"""
 
     if len(window_df) <= 1:
-        # 빈 window 또는 메시지 거의 없음 → 기본값
         return {
             "n_msgs": len(window_df),
             "duration": 1e-6,
@@ -66,32 +68,23 @@ def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
     duration = float(ts[-1] - ts[0]) or 1e-6
     delta_ts = np.diff(ts)
 
-    # 기본 통계
     n_msgs = len(window_df)
     total_msg_rate = n_msgs / duration
 
-    # ID 분석
     id_counter = Counter(ids)
     unique_ids = len(id_counter)
     id_entropy = _entropy(id_counter)
     top1_id_ratio = max(id_counter.values()) / n_msgs
 
-    # Δt 분석
     mean_delta_t = float(np.mean(delta_ts))
     std_delta_t = float(np.std(delta_ts))
 
-    # payload entropy
-    entropies = []
     lengths = []
+    entropies = []
     for p in payloads:
         s = p.replace(" ", "")
         lengths.append(len(s) // 2)
         entropies.append(_payload_entropy(p))
-
-    payload_len_mean = float(np.mean(lengths))
-    payload_len_std = float(np.std(lengths))
-    payload_entropy_mean = float(np.mean(entropies))
-    payload_entropy_std = float(np.std(entropies))
 
     feats = {
         "n_msgs": n_msgs,
@@ -102,46 +95,55 @@ def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
         "top1_id_ratio": top1_id_ratio,
         "mean_delta_t": mean_delta_t,
         "std_delta_t": std_delta_t,
-        "payload_len_mean": payload_len_mean,
-        "payload_len_std": payload_len_std,
-        "payload_entropy_mean": payload_entropy_mean,
-        "payload_entropy_std": payload_entropy_std,
+        "payload_len_mean": float(np.mean(lengths)),
+        "payload_len_std": float(np.std(lengths)),
+        "payload_entropy_mean": float(np.mean(entropies)),
+        "payload_entropy_std": float(np.std(entropies)),
         "dlc_mean": float(np.mean(dlcs)),
         "dlc_std": float(np.std(dlcs)),
     }
 
     return feats
 
+def assign_window_label(window_df: pd.DataFrame) -> str:
+    if len(window_df) == 0:
+        return "Normal"
 
-def build_dataset_from_csv(
-    csv_path: str,
-    window_sec: float,
-) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame, Dict[str, str]]:
-    """
-    최종 윈도우 + feature dataset 생성
-    """
+    labels = window_df["Label"].unique()
+    best = "Normal"
+    best_score = 0
 
+    for lb in labels:
+        if ATTACK_PRIORITY.get(lb, -1) > best_score:
+            best = lb
+            best_score = ATTACK_PRIORITY[lb]
+
+    return best
+
+def build_dataset_from_csv(csv_path: str, window_sec: float):
     df, col_info = load_csv_with_meta(csv_path)
-
-    # window = (window_df, window_label, start_time, end_time)
-    windows = make_time_windows(df, window_sec)
+    windows = make_time_windows(df, col_info, window_sec)
 
     feature_rows = []
     labels = []
     meta_rows = []
 
-    for window_df, window_label, start_t, end_t in windows:
-        feats = compute_window_features(window_df)
-        feature_rows.append(feats)
-        labels.append(window_label)
+    for w in windows:
+        wdf = w["df"]
+        start_t = w["start_time"]
+        end_t = w["end_time"]
 
-        meta_rows.append(
-            {
-                "start_time": start_t,
-                "end_time": end_t,
-                "n_msgs": len(window_df),
-            }
-        )
+        feats = compute_window_features(wdf)
+        feature_rows.append(feats)
+
+        lbl = assign_window_label(wdf)
+        labels.append(lbl)
+
+        meta_rows.append({
+            "start_time": start_t,
+            "end_time": end_t,
+            "n_msgs": len(wdf)
+        })
 
     X = pd.DataFrame(feature_rows)
     y = pd.Series(labels, name="window_label")

@@ -1,64 +1,52 @@
 import pandas as pd
-from typing import List, Tuple, Optional
+from typing import List, Dict
 
-ATTACK_PRIORITY = {
-    "DoS": 4,
-    "Fuzzing": 3,
-    "Spoofing": 2,
-    "Replay": 1,
-    "Normal": 0,
-}
 
-def normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_timestamp(df: pd.DataFrame, ts_col: str) -> pd.DataFrame:
+    """Timestamp를 0부터 시작하도록 정규화"""
     df = df.copy()
-    df["Timestamp"] = df["Timestamp"] - df["Timestamp"].min()
+    df[ts_col] = df[ts_col] - df[ts_col].min()
     return df
 
 
-def assign_window_label(window_df: pd.DataFrame) -> str:
-    """공격 한 개라도 있으면 우선순위에 따라 해당 공격으로 라벨링"""
-    if len(window_df) == 0:
-        return "Normal"
-
-    labels = window_df["Label"].unique()
-    best = "Normal"
-    best_score = 0
-
-    for lb in labels:
-        if ATTACK_PRIORITY.get(lb, -1) > best_score:
-            best = lb
-            best_score = ATTACK_PRIORITY[lb]
-
-    return best
-
-
 def make_time_windows(
-    df: pd.DataFrame, window_sec: float
-) -> List[Tuple[pd.DataFrame, str]]:
+    df: pd.DataFrame,
+    col_info: Dict[str, str],
+    window_sec: float
+) -> List[Dict]:
     """
-    Fixed window (no overlap)
-    - timestamp를 0부터 시작하도록 normalization
-    - 전체 구간을 window_sec 간격으로 끝까지 탐색
-    - window_df가 empty라도 skip하지 않음
+    반환 형식 (features.py와 완전 일치):
+    [
+        {
+            "df": <window dataframe>,
+            "start_time": float,
+            "end_time": float
+        }
+    ]
     """
 
-    df = normalize_timestamp(df)
-    min_t = df["Timestamp"].min()
-    max_t = df["Timestamp"].max()
+    ts_col = col_info["timestamp"]
+
+    df = normalize_timestamp(df, ts_col)
+
+    ts = df[ts_col].values
+    max_t = float(ts.max())
 
     windows = []
-    cur = min_t
+    cur = 0.0
 
     while cur < max_t:
         start = cur
         end = cur + window_sec
 
-        window_df = df[(df["Timestamp"] >= start) &
-                       (df["Timestamp"] < end)]
+        wdf = df[(df[ts_col] >= start) & (df[ts_col] < end)]
 
-        window_label = assign_window_label(window_df)
+        windows.append({
+            "df": wdf,
+            "start_time": float(start),
+            "end_time": float(end),
+        })
 
-        windows.append((window_df, window_label))
-        cur = end  # move to next window (no overlap)
+        cur = end
 
     return windows
