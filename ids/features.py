@@ -1,155 +1,150 @@
 # ids/features.py
-# 윈도우 하나 -> feature dict 하나로 만드는 함수
 
-from typing import Dict, Any, List, Optional
+from __future__ import annotations
+from typing import Dict, Any, Tuple, Optional, List
+from collections import Counter
+import math
+
 import numpy as np
 import pandas as pd
-from .payload_utils import row_to_bytes, compute_entropy_from_bytes
+
+from .io_utils import load_csv_with_meta
+from .windowing import make_time_windows
 
 
-# Δt 기반 통계량
-def dt_stats(window: pd.DataFrame, timestamp_col: str) -> Dict[str, float]:
-    ts = window[timestamp_col].values
-    if len(ts) < 2:
+def _entropy(counter: Counter) -> float:
+    total = sum(counter.values())
+    if total == 0:
+        return 0.0
+    ent = 0.0
+    for v in counter.values():
+        p = v / total
+        ent -= p * math.log2(p)
+    return ent
+
+
+def _payload_entropy(hex_str: str) -> float:
+    if not isinstance(hex_str, str):
+        return 0.0
+    s = hex_str.replace(" ", "")
+    if len(s) == 0:
+        return 0.0
+    try:
+        raw = bytes.fromhex(s)
+    except ValueError:
+        return 0.0
+    return _entropy(Counter(raw))
+
+
+def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
+    """Fixed window → feature vector"""
+
+    if len(window_df) <= 1:
+        # 빈 window 또는 메시지 거의 없음 → 기본값
         return {
-            "dt_mean": 0.0,
-            "dt_std": 0.0,
-            "dt_min": 0.0,
-            "dt_max": 0.0,
+            "n_msgs": len(window_df),
+            "duration": 1e-6,
+            "total_msg_rate": 0,
+            "unique_ids": 0,
+            "id_entropy": 0,
+            "top1_id_ratio": 0,
+            "mean_delta_t": 0,
+            "std_delta_t": 0,
+            "payload_len_mean": 0,
+            "payload_len_std": 0,
+            "payload_entropy_mean": 0,
+            "payload_entropy_std": 0,
+            "dlc_mean": 0,
+            "dlc_std": 0,
         }
-    dts = np.diff(ts)
-    return {
-        "dt_mean": float(dts.mean()),
-        "dt_std": float(dts.std()),
-        "dt_min": float(dts.min()),
-        "dt_max": float(dts.max()),
-    }
 
+    ts = window_df["Timestamp"].values.astype(float)
+    ids = window_df["Arbitration_ID"].astype(str).values
+    payloads = window_df["Data"].astype(str).values
+    dlcs = window_df["DLC"].values.astype(float)
 
-# ID 빈도 기반 특징
-def id_freq_features(window: pd.DataFrame, id_col: str, top_k: int = 10) -> Dict[str, float]:
-    ids, counts = np.unique(window[id_col].values, return_counts=True)
-    total = counts.sum()
-    idx_sorted = np.argsort(-counts)[:top_k]
-    feats = {}
-    for rank, idx in enumerate(idx_sorted):
-        feats[f"id_top{rank}_value"] = ids[idx]
-        feats[f"id_top{rank}_ratio"] = float(counts[idx] / total)
-    feats["id_unique_count"] = float(len(ids))
-    return feats
+    duration = float(ts[-1] - ts[0]) or 1e-6
+    delta_ts = np.diff(ts)
 
+    # 기본 통계
+    n_msgs = len(window_df)
+    total_msg_rate = n_msgs / duration
 
-# Payload entropy 특징
-def entropy_features(
-    window: pd.DataFrame,
-    data_col: Optional[str],
-    byte_cols: List[str],
-) -> Dict[str, float]:
+    # ID 분석
+    id_counter = Counter(ids)
+    unique_ids = len(id_counter)
+    id_entropy = _entropy(id_counter)
+    top1_id_ratio = max(id_counter.values()) / n_msgs
+
+    # Δt 분석
+    mean_delta_t = float(np.mean(delta_ts))
+    std_delta_t = float(np.std(delta_ts))
+
+    # payload entropy
     entropies = []
-    for _, row in window.iterrows():
-        b = row_to_bytes(row, data_col, byte_cols)
-        if b is not None:
-            entropies.append(compute_entropy_from_bytes(b))
+    lengths = []
+    for p in payloads:
+        s = p.replace(" ", "")
+        lengths.append(len(s) // 2)
+        entropies.append(_payload_entropy(p))
 
-    if not entropies:
-        return {
-            "entropy_mean": 0.0,
-            "entropy_std": 0.0,
-        }
+    payload_len_mean = float(np.mean(lengths))
+    payload_len_std = float(np.std(lengths))
+    payload_entropy_mean = float(np.mean(entropies))
+    payload_entropy_std = float(np.std(entropies))
 
-    arr = np.array(entropies)
-    return {
-        "entropy_mean": float(arr.mean()),
-        "entropy_std": float(arr.std()),
+    feats = {
+        "n_msgs": n_msgs,
+        "duration": duration,
+        "total_msg_rate": total_msg_rate,
+        "unique_ids": unique_ids,
+        "id_entropy": id_entropy,
+        "top1_id_ratio": top1_id_ratio,
+        "mean_delta_t": mean_delta_t,
+        "std_delta_t": std_delta_t,
+        "payload_len_mean": payload_len_mean,
+        "payload_len_std": payload_len_std,
+        "payload_entropy_mean": payload_entropy_mean,
+        "payload_entropy_std": payload_entropy_std,
+        "dlc_mean": float(np.mean(dlcs)),
+        "dlc_std": float(np.std(dlcs)),
     }
-
-
-# Replay 공격에 민감한 Feature 추가
-def replay_sensitive_features(window: pd.DataFrame, id_col: str, data_col: str, byte_cols):
-    # payload bytes 추출
-    payloads = []
-    for _, row in window.iterrows():
-        b = row_to_bytes(row, data_col, byte_cols)
-        if b is not None:
-            payloads.append(bytes(b))
-
-    # payload가 하나도 없으면 기본값
-    if not payloads:
-        return {
-            "payload_repeat_ratio": 0.0,
-            "payload_change_count": 0.0,
-            "payload_change_ratio": 0.0,
-            "id_data_combo_repeat_ratio": 0.0,
-        }
-
-
-    # Payload 반복 비율
-    unique_payloads = set(payloads)
-    payload_repeat_ratio = 1 - (len(unique_payloads) / len(payloads))
-
-
-    # Payload 변화 횟수 / 비율
-    change_count = 0
-    for i in range(1, len(payloads)):
-        if payloads[i] != payloads[i - 1]:
-            change_count += 1
-    change_ratio = change_count / max(1, len(payloads) - 1)
-
-
-    # ID + DATA 조합 반복률
-    combos = list(zip(window[id_col].values, payloads))
-    unique_combos = len(set(combos))
-    combo_repeat_ratio = 1 - (unique_combos / len(combos))
-
-    return {
-        "payload_repeat_ratio": float(payload_repeat_ratio),
-        "payload_change_count": float(change_count),
-        "payload_change_ratio": float(change_ratio),
-        "id_data_combo_repeat_ratio": float(combo_repeat_ratio),
-    }
-
-
-# 전체 Feature 생성기
-def window_to_feature_vector(
-    window: pd.DataFrame,
-    col_info: Dict[str, Any],
-    top_k_ids: int = 10,
-) -> Dict[str, Any]:
-    feats: Dict[str, Any] = {}
-    t_col = col_info["timestamp"]
-    id_col = col_info["id"]
-    data_col = col_info["data"]
-    byte_cols = col_info["byte_cols"]
-
-    # Δt statistics
-    feats.update(dt_stats(window, t_col))
-
-    # ID frequency
-    if id_col is not None:
-        feats.update(id_freq_features(window, id_col, top_k=top_k_ids))
-
-    # Entropy stats
-    feats.update(entropy_features(window, data_col, byte_cols))
-
-    # Replay-sensitive feature
-    if id_col is not None:
-        feats.update(replay_sensitive_features(window, id_col, data_col, byte_cols))
 
     return feats
 
 
-# 라벨 결정
-def label_for_window(w, col_info):
-    label_col = col_info["label"]
-    labels = list(w[label_col].astype(str).unique())
+def build_dataset_from_csv(
+    csv_path: str,
+    window_sec: float,
+) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame, Dict[str, str]]:
+    """
+    최종 윈도우 + feature dataset 생성
+    """
 
-    if "Attack" in labels:
-        return "Attack"
+    df, col_info = load_csv_with_meta(csv_path)
 
-    if "Normal" in labels:
-        return "Normal"
+    # window = (window_df, window_label, start_time, end_time)
+    windows = make_time_windows(df, window_sec)
 
-    if len(labels) > 0:
-        return labels[0]
+    feature_rows = []
+    labels = []
+    meta_rows = []
 
-    return None
+    for window_df, window_label, start_t, end_t in windows:
+        feats = compute_window_features(window_df)
+        feature_rows.append(feats)
+        labels.append(window_label)
+
+        meta_rows.append(
+            {
+                "start_time": start_t,
+                "end_time": end_t,
+                "n_msgs": len(window_df),
+            }
+        )
+
+    X = pd.DataFrame(feature_rows)
+    y = pd.Series(labels, name="window_label")
+    meta = pd.DataFrame(meta_rows)
+
+    return X, y, meta, col_info

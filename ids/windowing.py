@@ -1,89 +1,64 @@
-# ids/windowing.py
-# 슬라이딩 윈도우 (Replay-Enhanced)
-
-from typing import List, Dict, Any, Optional
 import pandas as pd
-import numpy as np
+from typing import List, Tuple, Optional
+
+ATTACK_PRIORITY = {
+    "DoS": 4,
+    "Fuzzing": 3,
+    "Spoofing": 2,
+    "Replay": 1,
+    "Normal": 0,
+}
+
+def normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["Timestamp"] = df["Timestamp"] - df["Timestamp"].min()
+    return df
 
 
-def _attach_window_metadata(win: pd.DataFrame) -> pd.DataFrame:
-    """
-    리플레이 탐지 강화용 윈도우 메타데이터 생성:
-    - message_count (윈도우 내 메시지 수)
-    - id_unique_count (다양한 ID 개수)
-    - avg_payload_len (평균 데이터 길이)
-    """
+def assign_window_label(window_df: pd.DataFrame) -> str:
+    """공격 한 개라도 있으면 우선순위에 따라 해당 공격으로 라벨링"""
+    if len(window_df) == 0:
+        return "Normal"
 
-    win = win.copy()
+    labels = window_df["Label"].unique()
+    best = "Normal"
+    best_score = 0
 
-    # 메시지 수
-    win["_window_msg_count"] = len(win)
+    for lb in labels:
+        if ATTACK_PRIORITY.get(lb, -1) > best_score:
+            best = lb
+            best_score = ATTACK_PRIORITY[lb]
 
-    # ID 고유 개수
-    if "id" in win.columns:
-        win["_window_id_unique"] = win["id"].nunique()
-    else:
-        win["_window_id_unique"] = 0
-
-    # Payload 평균 길이
-    payload_len = []
-    if "data" in win.columns:
-        for v in win["data"].astype(str).values:
-            payload_len.append(len(v) // 2)  # hex length → byte length
-    elif any(col.startswith("byte") for col in win.columns):
-        byte_cols = [c for c in win.columns if c.startswith("byte")]
-        for _, row in win[byte_cols].iterrows():
-            payload_len.append(sum=pd.notna(row).sum())
-    else:
-        payload_len.append(0)
-
-    win["_window_avg_payload_len"] = float(np.mean(payload_len))
-
-    return win
+    return best
 
 
 def make_time_windows(
-    df: pd.DataFrame,
-    timestamp_col: str,
-    window_sec: float = 1.0,
-    step_sec: Optional[float] = None,
-) -> List[pd.DataFrame]:
+    df: pd.DataFrame, window_sec: float
+) -> List[Tuple[pd.DataFrame, str]]:
     """
-    Timestamp 기반 time-sliding windows 생성.
-    Replay 공격을 대비하기 위해 아래 기능을 추가:
-    - 순서 정렬 및 연속 index 부여 (리플레이 패턴 탐지에 유용)
-    - 윈도우 메타데이터 추가 (message_count, id_unique_count 등)
+    Fixed window (no overlap)
+    - timestamp를 0부터 시작하도록 normalization
+    - 전체 구간을 window_sec 간격으로 끝까지 탐색
+    - window_df가 empty라도 skip하지 않음
     """
 
-    if step_sec is None:
-        step_sec = window_sec  # non-overlapping 기본
-
-    # Timestamp 정렬
-    df_sorted = df.sort_values(by=timestamp_col).reset_index(drop=True)
-
-    # 윈도우 생성 범위 결정
-    t0 = df_sorted[timestamp_col].iloc[0]
-    t_end = df_sorted[timestamp_col].iloc[-1]
+    df = normalize_timestamp(df)
+    min_t = df["Timestamp"].min()
+    max_t = df["Timestamp"].max()
 
     windows = []
-    start = t0
+    cur = min_t
 
-    while start <= t_end:
-        end = start + window_sec
+    while cur < max_t:
+        start = cur
+        end = cur + window_sec
 
-        mask = (df_sorted[timestamp_col] >= start) & (df_sorted[timestamp_col] < end)
-        win = df_sorted[mask]
+        window_df = df[(df["Timestamp"] >= start) &
+                       (df["Timestamp"] < end)]
 
-        if not win.empty:
-            # 윈도우 내 메시지 순서 index 부여
-            win = win.reset_index(drop=True)
-            win["_seq_index"] = win.index       # LSTM/CNN에 유용
+        window_label = assign_window_label(window_df)
 
-            # Replay-detection 메타데이터 추가
-            win = _attach_window_metadata(win)
-
-            windows.append(win)
-
-        start += step_sec
+        windows.append((window_df, window_label))
+        cur = end  # move to next window (no overlap)
 
     return windows
