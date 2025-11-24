@@ -16,7 +16,7 @@ python -m venv .venv
 ### 3️⃣ 가상환경 활성화
 **Linux / macOS / WSL**
 ```bash
-python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 **Windows PowerShell**
