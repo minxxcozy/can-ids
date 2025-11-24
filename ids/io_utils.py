@@ -1,53 +1,75 @@
 # ids/io_utils.py
+
+from __future__ import annotations
+from typing import Dict, Tuple, Optional
 import pandas as pd
-from typing import List, Optional, Tuple
-from .config import (
-    TIMESTAMP_CANDIDATES,
-    ID_CANDIDATES,
-    DATA_CANDIDATES,
-    LABEL_CANDIDATES,
-    SUBLABEL_CANDIDATES,
-    BYTE_PREFIXES,
-)
 
 
-def _find_first_match(columns: List[str], candidates: List[str]) -> Optional[str]:
-    lower_cols = {c.lower(): c for c in columns}
-    for cand in candidates:
-        if cand in lower_cols:
-            return lower_cols[cand]
-    return None
+def load_csv_with_meta(csv_path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """
+    CSV 파일을 로드하고, Timestamp / CAN ID / Payload / DLC / Label 컬럼을 자동 탐지한다.
+    기본 기대 형식: Timestamp, Arbitration_ID, DLC, Data, Label
+    """
+    df = pd.read_csv(csv_path)
 
+    # timestamp 후보
+    ts_candidates = ["Timestamp", "timestamp", "time", "Time", "ts"]
+    ts_col: Optional[str] = None
+    for c in ts_candidates:
+        if c in df.columns:
+            ts_col = c
+            break
+    if ts_col is None:
+        raise ValueError(f"Timestamp column not found. Tried: {ts_candidates}")
 
-def detect_columns(df: pd.DataFrame):
-    cols = list(df.columns)
-    lower_map = {c.lower(): c for c in cols}
+    # CAN ID 후보
+    id_candidates = ["Arbitration_ID", "arbitration_id", "CAN_ID", "can_id", "ID", "id"]
+    id_col: Optional[str] = None
+    for c in id_candidates:
+        if c in df.columns:
+            id_col = c
+            break
+    if id_col is None:
+        raise ValueError(f"CAN ID column not found. Tried: {id_candidates}")
 
-    timestamp_col = _find_first_match(cols, TIMESTAMP_CANDIDATES)
-    id_col        = _find_first_match(cols, ID_CANDIDATES)
-    data_col      = _find_first_match(cols, DATA_CANDIDATES)
-    label_col     = _find_first_match(cols, LABEL_CANDIDATES)
-    sublabel_col  = _find_first_match(cols, SUBLABEL_CANDIDATES)
+    # Payload 후보
+    payload_candidates = ["Data", "data", "Payload", "payload"]
+    payload_col: Optional[str] = None
+    for c in payload_candidates:
+        if c in df.columns:
+            payload_col = c
+            break
+    if payload_col is None:
+        raise ValueError(f"Payload column not found. Tried: {payload_candidates}")
 
-    # Data_0, data_1, byte_0 등 prefix 기반 바이트 컬럼
-    byte_cols = [
-        c for c in cols
-        if any(c.lower().startswith(p) for p in BYTE_PREFIXES)
-    ]
+    # DLC 후보
+    dlc_candidates = ["DLC", "dlc", "Length", "length"]
+    dlc_col: Optional[str] = None
+    for c in dlc_candidates:
+        if c in df.columns:
+            dlc_col = c
+            break
 
-    info = {
-        "timestamp": timestamp_col,
-        "id": id_col,
-        "data": data_col,
-        "label": label_col,
-        "sublabel": sublabel_col,
-        "byte_cols": byte_cols,
+    # Label 후보 (train에는 있고, test에는 없을 수도 있음)
+    label_candidates = ["Label", "label", "Class", "class", "y"]
+    label_col: Optional[str] = None
+    for c in label_candidates:
+        if c in df.columns:
+            label_col = c
+            break
+
+    # timestamp 정렬
+    df[ts_col] = df[ts_col].astype(float)
+    df = df.sort_values(ts_col).reset_index(drop=True)
+
+    col_info: Dict[str, str] = {
+        "timestamp": ts_col,
+        "can_id": id_col,
+        "payload": payload_col,
     }
+    if dlc_col is not None:
+        col_info["dlc"] = dlc_col
+    if label_col is not None:
+        col_info["label"] = label_col
 
-    return info
-
-
-def load_csv_with_meta(path: str):
-    df = pd.read_csv(path)
-    col_info = detect_columns(df)
     return df, col_info
