@@ -89,3 +89,16 @@ python -m models.train_attack_multi --csv data/ids_train.csv --window-sec 0.2
 ```bash
 python -m models.predict --csv data/ids_test.csv --binary models/binary.pkl --attack models/attack.pkl --out data/test_pred.csv
 ```
+고정되어 있는 내부 값으로 자동 실행 : 
+* window-sec = 0.2
+* threshold = 0.55
+
+**window-sec 값 변경 시**
+```bash
+python -m models.predict --csv data/ids_test.csv --window-sec 0.5
+```
+
+**threshold 값 변경 시**
+```bash
+python -m models.predict --csv data/ids_test.csv --threshold 0.4
+```
