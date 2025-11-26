@@ -47,25 +47,18 @@ pip install -r requirements.txt
 ```markdown
 ids/
 │
-├── __pycache__/
-│
 ├── __init__.py
 ├── features.py
 ├── io_utils.py
-├── normal_profile.py
-├── reinforce.py
-└── windowing.py
+└── reinforce.py
 
 
 models/
 │
-├── __pycache__/
-│
 ├── __init__.py
 ├── predict.py
-├── train_attack_multi.py
 ├── train_binary.py
-└── train_multi.py
+└── train_attack_multi.py
 ```
 
 ## 🔍 4. CSV 데이터 준비
