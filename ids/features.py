@@ -10,6 +10,8 @@ import pandas as pd
 from .io_utils import load_csv_with_meta
 from .windowing import make_time_windows
 
+
+# 공격 라벨 우선순위 (train에서만 사용)
 ATTACK_PRIORITY = {
     "DoS": 4,
     "Fuzzing": 3,
@@ -18,6 +20,8 @@ ATTACK_PRIORITY = {
     "Normal": 0,
 }
 
+
+#  Entropy Helpers
 def _entropy(counter: Counter) -> float:
     total = sum(counter.values())
     if total == 0:
@@ -27,6 +31,7 @@ def _entropy(counter: Counter) -> float:
         p = v / total
         ent -= p * math.log2(p)
     return ent
+
 
 def _payload_entropy(hex_str: str) -> float:
     if not isinstance(hex_str, str):
@@ -40,8 +45,11 @@ def _payload_entropy(hex_str: str) -> float:
         return 0.0
     return _entropy(Counter(raw))
 
+
+#  Feature Extraction
 def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
 
+    # very small window
     if len(window_df) <= 1:
         return {
             "n_msgs": len(window_df),
@@ -105,9 +113,15 @@ def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
 
     return feats
 
-def assign_window_label(window_df: pd.DataFrame) -> str:
-    if len(window_df) == 0:
-        return "Normal"
+
+#  Label Assignment (Train only)
+def assign_window_label(window_df: pd.DataFrame):
+    """
+    Train 데이터에는 Label 컬럼이 있음.
+    Test(Predict) 데이터에는 없음 → None 반환.
+    """
+    if "Label" not in window_df.columns:
+        return None
 
     labels = window_df["Label"].unique()
     best = "Normal"
@@ -120,8 +134,14 @@ def assign_window_label(window_df: pd.DataFrame) -> str:
 
     return best
 
+
+#  Dataset Builder (Train + Predict)
 def build_dataset_from_csv(csv_path: str, window_sec: float):
     df, col_info = load_csv_with_meta(csv_path)
+
+    # Test 모드 자동 감지
+    skip_label = ("Label" not in df.columns)
+
     windows = make_time_windows(df, col_info, window_sec)
 
     feature_rows = []
@@ -133,20 +153,28 @@ def build_dataset_from_csv(csv_path: str, window_sec: float):
         start_t = w["start_time"]
         end_t = w["end_time"]
 
+        # Feature extraction
         feats = compute_window_features(wdf)
         feature_rows.append(feats)
 
+        # Label (train only)
         lbl = assign_window_label(wdf)
-        labels.append(lbl)
+        if not skip_label and lbl is not None:
+            labels.append(lbl)
 
         meta_rows.append({
             "start_time": start_t,
             "end_time": end_t,
-            "n_msgs": len(wdf)
+            "n_msgs": len(wdf),
         })
 
     X = pd.DataFrame(feature_rows)
-    y = pd.Series(labels, name="window_label")
     meta = pd.DataFrame(meta_rows)
 
+    # Predict/Test 모드
+    if skip_label:
+        return X, None, meta, col_info
+
+    # Train 모드
+    y = pd.Series(labels, name="window_label")
     return X, y, meta, col_info

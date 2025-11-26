@@ -9,71 +9,85 @@ from ids.features import build_dataset_from_csv
 
 def predict(csv_path: str, binary_path: str, attack_path: str,
             out_path: str, window_sec: float, threshold: float):
+
     print(f"[PRED] Loading test CSV: {csv_path}")
+
+    # 1) 원본 메시지 로드 (최종 제출용 기반)
+    df_raw = pd.read_csv(csv_path)
+    df_raw = df_raw.sort_values("Timestamp").reset_index(drop=True)
+    df_raw["Label"] = "Normal"   # default label
+
+    # 2) window 단위 feature 생성
     X, _, meta, col_info = build_dataset_from_csv(csv_path, window_sec=window_sec)
 
     print("[PRED] Loading models...")
     bin_art = joblib.load(binary_path)
     atk_art = joblib.load(attack_path)
 
-    # Extract models + feature order
     bin_model = bin_art["model"]
     atk_model = atk_art["model"]
     atk_le = atk_art["label_encoder"]
 
-    # 1) Binary 모델 feature 정렬
     bin_cols = bin_art["columns"]
-    X = X[bin_cols]
-
-    # 2) Attack 모델 feature 정렬
     atk_cols = atk_art["columns"]
-    X = X[atk_cols]
 
-    # Stage 1 — Binary prediction
-    bin_pred = bin_model.predict(X)
+    # 필요 feature subset
+    X_bin = X[bin_cols]
+    X_atk = X[atk_cols]
 
-    final_pred = []
+    # 3) Stage 1: Binary classifier
+    print("[PRED] Running binary classifier...")
+    bin_pred = bin_model.predict(X_bin)
 
+    # 4) Stage 2: Attack classifier
+    print("[PRED] Running attack classifier...")
+    atk_proba = atk_model.predict_proba(X_atk)
+    atk_pred_idx = atk_model.predict(X_atk)
+    atk_pred_label = atk_le.inverse_transform(atk_pred_idx)
+    atk_max_prob = atk_proba.max(axis=1)
+
+    # 5) Window 단위 최종 예측 label 생성
+    final_window_pred = []
     for i in range(len(X)):
         if bin_pred[i] == "Normal":
-            # Binary가 확신하면 Normal
-            label = "Normal"
-
+            final_window_pred.append("Normal")
         else:
-            # Attack classifier 확률 기반
-            atk_row = X.iloc[[i]]
-            proba = atk_model.predict_proba(atk_row)[0]
-            max_p = float(np.max(proba))
-
-            if max_p < threshold:
-                # 공격 모델이 애매하면 Normal로 보정
-                label = "Normal"
+            if atk_max_prob[i] < threshold:
+                final_window_pred.append("Normal")
             else:
-                atk_class = atk_model.predict(atk_row)[0]
-                label = atk_le.inverse_transform([atk_class])[0]
+                final_window_pred.append(atk_pred_label[i])
 
-        final_pred.append(label)
+    # 6) Window → Raw 메시지 매핑
+    print("[PRED] Mapping window predictions to raw rows...")
 
-    df_out = pd.DataFrame({
-        "start_time": meta["start_time"],
-        "end_time": meta["end_time"],
-        "pred": final_pred
-    })
+    for i in range(len(meta)):
+        start_t = meta.iloc[i]["start_time"]
+        end_t = meta.iloc[i]["end_time"]
+        label = final_window_pred[i]
 
-    df_out.to_csv(out_path, index=False)
-    print(f"[✓] Saved prediction → {out_path}")
+        # 마지막 window는 <= 로 잡아 데이터 유실 방지
+        if i == len(meta) - 1:
+            mask = (df_raw["Timestamp"] >= start_t) & (df_raw["Timestamp"] <= end_t)
+        else:
+            mask = (df_raw["Timestamp"] >= start_t) & (df_raw["Timestamp"] < end_t)
+
+        df_raw.loc[mask, "Label"] = label
+
+    # 7) 제출 파일 저장
+    df_raw.to_csv(out_path, index=False)
+    print(f"[✓] Saved submission CSV → {out_path}")
+
+    print(df_raw.head())
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True)
+    p.add_argument("--csv", required=True, help="Test CSV path")
     p.add_argument("--binary", default="models/binary.pkl")
     p.add_argument("--attack", default="models/attack.pkl")
-    p.add_argument("--out", default="data/test_pred.csv")
-    p.add_argument("--window-sec", type=float, default=0.2,
-                   help="Window size (seconds) — train과 동일하게")
-    p.add_argument("--threshold", type=float, default=0.55,
-                   help="Attack classifier 확률 < threshold → Normal 재귀정")
+    p.add_argument("--out", default="submission.csv")
+    p.add_argument("--window-sec", type=float, default=0.2)
+    p.add_argument("--threshold", type=float, default=0.55)
 
     args = p.parse_args()
 
