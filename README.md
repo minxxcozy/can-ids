@@ -74,32 +74,18 @@ data/your_dataset.csv
 ### 1️⃣ Normal vs Attack 이진 모델 학습
 * 결과 파일: `models/binary.pkl`
 ```bash
-python -m models.train_binary --csv data/autohack2025_train.csv --window-sec 0.02
+python -m models.train_binary --csv data/autohack2025_train.csv
 ```
 
 ### 2️⃣ Attack 전용 4-class 모델 학습
 * 결과 파일: `models/attack.pkl`
 * 라벨: Fuzzing / DoS / Spoofing / Replay
 ```bash
-python -m models.train_attack_multi --csv data/autohack2025_train.csv --window-sec 0.02
+python -m models.train_attack_multi --csv data/autohack2025_train.csv
 ```
 
 ### 3️⃣ 테스트 데이터 예측
 **Linux / macOS / WSL**
 ```bash
-python -m models.predict --csv data/autohack2025_test_data.csv --binary models/binary.pkl --attack models/attack.pkl --out data/submission.csv --window-sec 0.02 --threshold 0.55
-
-```
-고정되어 있는 내부 값으로 자동 실행 : 
-* window-sec = 0.2
-* threshold = 0.55
-
-**window-sec 값 변경 시**
-```bash
-python -m models.predict --csv data/autohack2025_test_data.csv --window-sec 0.5
-```
-
-**threshold 값 변경 시**
-```bash
-python -m models.predict --csv data/autohack2025_test_data.csv --threshold 0.4
+python -m models.predict --csv data/autohack2025_test_data.csv --template data/submission_template.csv --out submission.csv
 ```
