@@ -1,5 +1,3 @@
-# models/train_binary.py
-
 from __future__ import annotations
 import argparse
 import os
@@ -18,9 +16,10 @@ def train_binary(csv_path: str, out_path: str):
 
     X, y_raw, _ = build_message_dataset(csv_path)
 
-    # Normal vs Attack 변환
+    # 1) Normal vs Attack
     y_binary = y_raw.apply(lambda x: "Normal" if x == "Normal" else "Attack")
 
+    # 2) Train/Val
     X_train, X_val, y_train, y_val = train_test_split(
         X, y_binary, test_size=0.2, random_state=42, stratify=y_binary
     )

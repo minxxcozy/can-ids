@@ -1,5 +1,3 @@
-# models/predict.py
-
 from __future__ import annotations
 import argparse
 import joblib
@@ -47,15 +45,13 @@ def predict(csv_path: str, template_path: str,
             else:
                 final_label.append(atk_label[i])
 
-    # Load template.csv (Timestamp, Label)
-    print("[PRED] Mapping into template...")
-    df_template = pd.read_csv(template_path)
+    # Load submission template
+    df_template = pd.read_csv(template_path, dtype=str)
 
-    if "Timestamp" not in df_template.columns:
-        raise RuntimeError("template.csv must contain 'Timestamp' column.")
-
-    # Timestamp 기반 merge
+    df_feat["Timestamp"] = df_feat["Timestamp"].astype(str)
     df_feat["pred_label"] = final_label
+
+    df_template["Timestamp"] = df_template["Timestamp"].astype(str)
 
     df_out = df_template.merge(
         df_feat[["Timestamp", "pred_label"]],

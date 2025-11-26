@@ -1,5 +1,3 @@
-# models/train_attack_multi.py
-
 from __future__ import annotations
 import argparse
 import os
@@ -18,7 +16,7 @@ def train_attack(csv_path: str, out_path: str):
 
     X, y_raw, _ = build_message_dataset(csv_path)
 
-    # Attack 데이터만 사용
+    # Attack-only 학습
     mask = y_raw != "Normal"
     X_atk = X[mask]
     y_atk = y_raw[mask]
