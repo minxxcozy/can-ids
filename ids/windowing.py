@@ -1,6 +1,6 @@
-import pandas as pd
-from typing import List, Dict
+# ids/windowing.py (FINAL — Replay/Spoofing 최적화)
 
+import pandas as pd
 
 def normalize_timestamp(df: pd.DataFrame, ts_col: str) -> pd.DataFrame:
     """Timestamp를 0부터 시작하도록 정규화"""
@@ -9,28 +9,22 @@ def normalize_timestamp(df: pd.DataFrame, ts_col: str) -> pd.DataFrame:
     return df
 
 
-def make_time_windows(
-    df: pd.DataFrame,
-    col_info: Dict[str, str],
-    window_sec: float
-) -> List[Dict]:
+def make_time_windows(df, col_info, window_sec, step_sec=None):
     """
-    반환 형식 (features.py와 완전 일치):
-    [
-        {
-            "df": <window dataframe>,
-            "start_time": float,
-            "end_time": float
-        }
-    ]
+    window_sec: 0.02 strongly recommended (micro anomaly detection)
+    step_sec  : default = window_sec (NO overlap)
     """
 
     ts_col = col_info["timestamp"]
-
     df = normalize_timestamp(df, ts_col)
 
+
+    # 1. Overlap 제거
+    if step_sec is None:
+        step_sec = window_sec
+
     ts = df[ts_col].values
-    max_t = float(ts.max())
+    max_t = ts.max()
 
     windows = []
     cur = 0.0
@@ -39,14 +33,17 @@ def make_time_windows(
         start = cur
         end = cur + window_sec
 
+        # window slice
         wdf = df[(df[ts_col] >= start) & (df[ts_col] < end)]
 
-        windows.append({
-            "df": wdf,
-            "start_time": float(start),
-            "end_time": float(end),
-        })
+        # 최소 메시지 수 체크 (빈 윈도우 제외)
+        if len(wdf) > 1:
+            windows.append({
+                "df": wdf,
+                "start_time": start,
+                "end_time": end
+            })
 
-        cur = end
+        cur += step_sec
 
     return windows
