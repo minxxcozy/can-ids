@@ -1,180 +1,140 @@
 # ids/features.py
 
-import math
-from typing import Dict, Any, List
-from collections import Counter
-
-import numpy as np
 import pandas as pd
+import numpy as np
 
-from .io_utils import load_csv_with_meta
-from .windowing import make_time_windows
-
-
-# 공격 라벨 우선순위 (train에서만 사용)
-ATTACK_PRIORITY = {
-    "DoS": 4,
-    "Fuzzing": 3,
-    "Spoofing": 2,
-    "Replay": 1,
-    "Normal": 0,
-}
+WINDOW_SIZE = 20
 
 
-#  Entropy Helpers
-def _entropy(counter: Counter) -> float:
-    total = sum(counter.values())
-    if total == 0:
-        return 0.0
-    ent = 0.0
-    for v in counter.values():
-        p = v / total
-        ent -= p * math.log2(p)
-    return ent
-
-
-def _payload_entropy(hex_str: str) -> float:
-    if not isinstance(hex_str, str):
-        return 0.0
-    s = hex_str.replace(" ", "")
-    if len(s) == 0:
-        return 0.0
+def parse_arbitration_id(x):
+    s = str(x).strip()
     try:
-        raw = bytes.fromhex(s)
-    except ValueError:
+        if s.lower().startswith("0x") or any(c in s.lower() for c in "abcdef"):
+            return int(s, 16)
+        return int(float(s))
+    except:
+        return 0
+
+
+def parse_data_bytes(s, max_len=8):
+    if pd.isna(s):
+        return [0] * max_len
+    parts = str(s).strip().split()
+    vals = []
+    for p in parts:
+        try:
+            vals.append(int(p, 16))
+        except:
+            vals.append(0)
+    if len(vals) < max_len:
+        vals += [0] * (max_len - len(vals))
+    return vals[:max_len]
+
+
+def shannon_entropy(arr):
+    arr = np.asarray(arr)
+    arr = arr[~np.isnan(arr)]
+    if len(arr) == 0:
         return 0.0
-    return _entropy(Counter(raw))
+    _, counts = np.unique(arr, return_counts=True)
+    probs = counts / counts.sum()
+    return float(-(probs * np.log2(probs)).sum())
 
 
-#  Feature Extraction
-def compute_window_features(window_df: pd.DataFrame) -> Dict[str, Any]:
+def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["Timestamp"] = pd.to_numeric(df["Timestamp"], errors="coerce")
+    df["Arb_ID_int"] = df["Arbitration_ID"].apply(parse_arbitration_id)
+    df["DLC"] = pd.to_numeric(df["DLC"], errors="coerce").fillna(0).astype(int)
 
-    # very small window
-    if len(window_df) <= 1:
-        return {
-            "n_msgs": len(window_df),
-            "duration": 1e-6,
-            "total_msg_rate": 0,
-            "unique_ids": 0,
-            "id_entropy": 0,
-            "top1_id_ratio": 0,
-            "mean_delta_t": 0,
-            "std_delta_t": 0,
-            "payload_len_mean": 0,
-            "payload_len_std": 0,
-            "payload_entropy_mean": 0,
-            "payload_entropy_std": 0,
-            "dlc_mean": 0,
-            "dlc_std": 0,
-        }
+    df = df.sort_values("Timestamp").reset_index(drop=True)
 
-    ts = window_df["Timestamp"].values.astype(float)
-    ids = window_df["Arbitration_ID"].astype(str).values
-    payloads = window_df["Data"].astype(str).values
-    dlcs = window_df["DLC"].values.astype(float)
+    # Data → 8 bytes
+    data_bytes = df["Data"].apply(parse_data_bytes)
+    data_bytes_df = pd.DataFrame(
+        data_bytes.tolist(),
+        columns=[f"data_{i}" for i in range(8)]
+    )
+    df = pd.concat([df, data_bytes_df], axis=1)
 
-    duration = float(ts[-1] - ts[0]) or 1e-6
-    delta_ts = np.diff(ts)
+    # basic historics
+    df["time_delta"] = df["Timestamp"].diff().fillna(0)
+    df["time_delta_id"] = df.groupby("Arb_ID_int")["Timestamp"].diff().fillna(0)
+    df["id_count"] = df.groupby("Arb_ID_int").cumcount() + 1
+    df["msg_index"] = np.arange(len(df)) + 1
+    df["id_freq_so_far"] = df["id_count"] / df["msg_index"]
 
-    n_msgs = len(window_df)
-    total_msg_rate = n_msgs / duration
+    # replay/spoofing helpers
+    id_data_last_ts = {}
+    same_payload_dt = []
+    same_as_prev_flag = []
 
-    id_counter = Counter(ids)
-    unique_ids = len(id_counter)
-    id_entropy = _entropy(id_counter)
-    top1_id_ratio = max(id_counter.values()) / n_msgs
+    prev_id = None
+    prev_data = None
 
-    mean_delta_t = float(np.mean(delta_ts))
-    std_delta_t = float(np.std(delta_ts))
+    for _, row in df.iterrows():
+        key = (row["Arb_ID_int"], row["Data"])
+        ts = row["Timestamp"]
 
-    lengths = []
-    entropies = []
-    for p in payloads:
-        s = p.replace(" ", "")
-        lengths.append(len(s) // 2)
-        entropies.append(_payload_entropy(p))
+        # time since last identical payload
+        if key in id_data_last_ts:
+            same_payload_dt.append(ts - id_data_last_ts[key])
+        else:
+            same_payload_dt.append(0.0)
+        id_data_last_ts[key] = ts
 
-    feats = {
-        "n_msgs": n_msgs,
-        "duration": duration,
-        "total_msg_rate": total_msg_rate,
-        "unique_ids": unique_ids,
-        "id_entropy": id_entropy,
-        "top1_id_ratio": top1_id_ratio,
-        "mean_delta_t": mean_delta_t,
-        "std_delta_t": std_delta_t,
-        "payload_len_mean": float(np.mean(lengths)),
-        "payload_len_std": float(np.std(lengths)),
-        "payload_entropy_mean": float(np.mean(entropies)),
-        "payload_entropy_std": float(np.std(entropies)),
-        "dlc_mean": float(np.mean(dlcs)),
-        "dlc_std": float(np.std(dlcs)),
-    }
+        # identical to previous msg?
+        if prev_id == row["Arb_ID_int"] and prev_data == row["Data"]:
+            same_as_prev_flag.append(1)
+        else:
+            same_as_prev_flag.append(0)
 
-    return feats
+        prev_id = row["Arb_ID_int"]
+        prev_data = row["Data"]
 
+    df["time_since_last_same_payload"] = same_payload_dt
+    df["is_same_as_prev_id_data"] = same_as_prev_flag
 
-#  Label Assignment (Train only)
-def assign_window_label(window_df: pd.DataFrame):
-    """
-    Train 데이터에는 Label 컬럼이 있음.
-    Test(Predict) 데이터에는 없음 → None 반환.
-    """
-    if "Label" not in window_df.columns:
-        return None
+    # rolling windows
+    df["ArbID_code"], _ = pd.factorize(df["Arb_ID_int"])
 
-    labels = window_df["Label"].unique()
-    best = "Normal"
-    best_score = 0
+    df["id_entropy_window"] = df["ArbID_code"].rolling(
+        WINDOW_SIZE, min_periods=1
+    ).apply(shannon_entropy, raw=True)
 
-    for lb in labels:
-        if ATTACK_PRIORITY.get(lb, -1) > best_score:
-            best = lb
-            best_score = ATTACK_PRIORITY[lb]
+    df["dlc_mean_window"] = df["DLC"].rolling(WINDOW_SIZE, min_periods=1).mean()
+    df["time_delta_mean_window"] = df["time_delta"].rolling(WINDOW_SIZE, min_periods=1).mean()
+    df["time_delta_std_window"] = df["time_delta"].rolling(WINDOW_SIZE, min_periods=1).std().fillna(0)
 
-    return best
+    byte_cols = [f"data_{i}" for i in range(8)]
+    df["data_mean"] = df[byte_cols].mean(axis=1)
+    df["data_std"] = df[byte_cols].std(axis=1).fillna(0)
+
+    df = df.fillna(0)
+    return df
 
 
-#  Dataset Builder (Train + Predict)
-def build_dataset_from_csv(csv_path: str, window_sec: float):
-    df, col_info = load_csv_with_meta(csv_path)
+def build_message_dataset(csv_path: str):
+    """Train/Test 모두 공용 message-level dataset builder"""
 
-    # Test 모드 자동 감지
-    skip_label = ("Label" not in df.columns)
+    df = pd.read_csv(csv_path)
+    df_feat = build_message_features(df)
 
-    windows = make_time_windows(df, col_info, window_sec)
+    feature_cols = [
+        "Arb_ID_int", "DLC",
+        "time_delta", "time_delta_id",
+        "id_count", "msg_index", "id_freq_so_far",
+        "time_since_last_same_payload", "is_same_as_prev_id_data",
+        "id_entropy_window", "dlc_mean_window",
+        "time_delta_mean_window", "time_delta_std_window",
+        "data_mean", "data_std",
+    ] + [f"data_{i}" for i in range(8)]
 
-    feature_rows = []
-    labels = []
-    meta_rows = []
+    X = df_feat[feature_cols]
 
-    for w in windows:
-        wdf = w["df"]
-        start_t = w["start_time"]
-        end_t = w["end_time"]
+    if "Label" in df.columns:
+        y = df["Label"].astype(str)
+    else:
+        y = None
 
-        # Feature extraction
-        feats = compute_window_features(wdf)
-        feature_rows.append(feats)
-
-        # Label (train only)
-        lbl = assign_window_label(wdf)
-        if not skip_label and lbl is not None:
-            labels.append(lbl)
-
-        meta_rows.append({
-            "start_time": start_t,
-            "end_time": end_t,
-            "n_msgs": len(wdf),
-        })
-
-    X = pd.DataFrame(feature_rows)
-    meta = pd.DataFrame(meta_rows)
-
-    # Predict/Test 모드
-    if skip_label:
-        return X, None, meta, col_info
-
-    # Train 모드
-    y = pd.Series(labels, name="window_label")
-    return X, y, meta, col_info
+    return X, y, df_feat
