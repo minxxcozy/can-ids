@@ -85,21 +85,15 @@ def predict(csv_path: str, template_path: str,
                 final_label.append(atk_label[i])
 
 
-    # Merge with Submission Template
+    # Final submission = template row-by-row + final_label
     df_template = pd.read_csv(template_path, dtype=str)
 
-    df_feat["Timestamp"] = df_feat["Timestamp"].astype(str)
-    df_feat["pred_label"] = final_label
+    # sanity check: 길이 같아야 한다
+    assert len(df_template) == len(final_label), \
+        f"Length mismatch: template={len(df_template)}, pred={len(final_label)}"
 
-    df_template["Timestamp"] = df_template["Timestamp"].astype(str)
-
-    df_out = df_template.merge(
-        df_feat[["Timestamp", "pred_label"]],
-        on="Timestamp",
-        how="left"
-    )
-
-    df_out["Label"] = df_out["pred_label"].fillna("Normal")
+    df_out = df_template.copy()
+    df_out["Label"] = final_label
     df_out = df_out[["Timestamp", "Label"]]
 
     df_out.to_csv(out_path, index=False)
