@@ -1,5 +1,3 @@
-# ids/features.py
-
 import pandas as pd
 import numpy as np
 
@@ -7,8 +5,11 @@ WINDOW_SIZE = 20
 
 
 def parse_arbitration_id(x):
+    if pd.isna(x):
+        return 0
     s = str(x).strip()
     try:
+        # hex 또는 숫자
         if s.lower().startswith("0x") or any(c in s.lower() for c in "abcdef"):
             return int(s, 16)
         return int(float(s))
@@ -19,6 +20,7 @@ def parse_arbitration_id(x):
 def parse_data_bytes(s, max_len=8):
     if pd.isna(s):
         return [0] * max_len
+
     parts = str(s).strip().split()
     vals = []
     for p in parts:
@@ -26,6 +28,8 @@ def parse_data_bytes(s, max_len=8):
             vals.append(int(p, 16))
         except:
             vals.append(0)
+
+    # 패딩
     if len(vals) < max_len:
         vals += [0] * (max_len - len(vals))
     return vals[:max_len]
@@ -43,11 +47,15 @@ def shannon_entropy(arr):
 
 def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["Timestamp"] = pd.to_numeric(df["Timestamp"], errors="coerce")
-    df["Arb_ID_int"] = df["Arbitration_ID"].apply(parse_arbitration_id)
+
+    # Timestamp / DLC 만 숫자로 변환
+    df["Timestamp"] = pd.to_numeric(df["Timestamp"], errors="coerce").fillna(0)
     df["DLC"] = pd.to_numeric(df["DLC"], errors="coerce").fillna(0).astype(int)
 
     df = df.sort_values("Timestamp").reset_index(drop=True)
+
+    # ID 변환
+    df["Arb_ID_int"] = df["Arbitration_ID"].apply(parse_arbitration_id)
 
     # Data → 8 bytes
     data_bytes = df["Data"].apply(parse_data_bytes)
@@ -57,14 +65,14 @@ def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     df = pd.concat([df, data_bytes_df], axis=1)
 
-    # basic historics
+    # Historics
     df["time_delta"] = df["Timestamp"].diff().fillna(0)
     df["time_delta_id"] = df.groupby("Arb_ID_int")["Timestamp"].diff().fillna(0)
     df["id_count"] = df.groupby("Arb_ID_int").cumcount() + 1
     df["msg_index"] = np.arange(len(df)) + 1
     df["id_freq_so_far"] = df["id_count"] / df["msg_index"]
 
-    # replay/spoofing helpers
+    # Replay / Spoofing helpers
     id_data_last_ts = {}
     same_payload_dt = []
     same_as_prev_flag = []
@@ -76,14 +84,14 @@ def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
         key = (row["Arb_ID_int"], row["Data"])
         ts = row["Timestamp"]
 
-        # time since last identical payload
+        # 동일 payload 마지막 시점
         if key in id_data_last_ts:
             same_payload_dt.append(ts - id_data_last_ts[key])
         else:
             same_payload_dt.append(0.0)
         id_data_last_ts[key] = ts
 
-        # identical to previous msg?
+        # 바로 이전 메시지와 동일 여부
         if prev_id == row["Arb_ID_int"] and prev_data == row["Data"]:
             same_as_prev_flag.append(1)
         else:
@@ -95,7 +103,7 @@ def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
     df["time_since_last_same_payload"] = same_payload_dt
     df["is_same_as_prev_id_data"] = same_as_prev_flag
 
-    # rolling windows
+    # Rolling windows
     df["ArbID_code"], _ = pd.factorize(df["Arb_ID_int"])
 
     df["id_entropy_window"] = df["ArbID_code"].rolling(
@@ -115,9 +123,14 @@ def build_message_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_message_dataset(csv_path: str):
-    """Train/Test 모두 공용 message-level dataset builder"""
+    """
+    Train/Test 공용 메시지 단위 데이터셋.
+    Row drop 절대 없음.
+    """
 
-    df = pd.read_csv(csv_path)
+    # 모든 컬럼을 문자열로 읽어 row drop 방지
+    df = pd.read_csv(csv_path, dtype=str)
+
     df_feat = build_message_features(df)
 
     feature_cols = [
@@ -132,6 +145,7 @@ def build_message_dataset(csv_path: str):
 
     X = df_feat[feature_cols]
 
+    # Label 있을 수 있음 (train)
     if "Label" in df.columns:
         y = df["Label"].astype(str)
     else:
