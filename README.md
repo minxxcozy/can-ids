@@ -45,22 +45,27 @@ pip install -r requirements.txt
 
 ## 📁 3. 프로젝트 구조
 ```markdown
-can-ids/
+ids/
 │
-├── ids/
-│   ├── io_utils.py          # CSV 컬럼 파서
-│   ├── windowing.py         # Fixed-window 생성
-│   ├── features.py          # Δt, entropy, rate 기반 feature 생성
-│   ├── normal_profile.py    # Normal window 통계 생성
+├── __pycache__/
 │
-├── models/
-│   ├── train_binary.py        # Step1: Normal vs Attack 학습
-│   ├── train_attack_multi.py  # Step2: Attack 4-class 학습
-│   ├── predict.py             # 최종 예측 수행
+├── __init__.py
+├── features.py
+├── io_utils.py
+├── normal_profile.py
+├── reinforce.py
+└── windowing.py
+
+
+models/
 │
-└── data/
-    ├── ids_train.csv
-    └── ids_test.csv
+├── __pycache__/
+│
+├── __init__.py
+├── predict.py
+├── train_attack_multi.py
+├── train_binary.py
+└── train_multi.py
 ```
 
 ## 🔍 4. CSV 데이터 준비
